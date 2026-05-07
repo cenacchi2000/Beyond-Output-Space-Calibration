@@ -62,19 +62,12 @@ The paper evaluates SEB-Cal across eight UCR/UEA datasets, eight time-series bac
 
 **Interpretation.** Unconstrained SEB-Cal tests whether spectral evidence adds reliability information beyond output-score remapping. Policy-selected SEB-Cal is the deployed policy and gives the safest aggregate operating point.
 
-### 3.2 Dataset-level regime structure
 
-![Dataset-level regime structure](./dataset_regime_structure.png)
+### 3.2 Frequency-bundle ablation
 
-SEB-Cal is intentionally regime-dependent. The strongest positive Corr-AUROC gains are observed on FordA, SelfRegulationSCP1, UWaveGestureLibrary, ECG200, and Wafer. Unfavorable regimes are not hidden failures; they are cases where the validation gate should reject spectral conditioning.
-
-The diagnostic FalseConf@0.9 behavior before gating is shown separately because high-confidence error safety is handled at the policy level:
-
-![FalseConf diagnostic by dataset](./falseconf_diagnostic_by_dataset.png)
-
-### 3.3 Frequency-bundle ablation
-
-![Frequency-bundle ablation](./frequency_bundle_ablation.png)
+<p align="center">
+  <img src="./frequency_bundle_ablation.svg" width="86%" alt="Frequency-bundle ablation">
+</p>
 
 | Variant | Corr-AUROC ↑ |
 |---|---:|
@@ -91,9 +84,11 @@ The diagnostic FalseConf@0.9 behavior before gating is shown separately because 
 
 This ablation is a **mechanism test for ranking signal**, not a deployment-safety table. FalseConf@0.9 and AURC safety are evaluated by the validation-gated policy.
 
-### 3.4 Validation-gated deployment policy
+### 3.3 Validation-gated deployment policy
 
-![Validation-gated deployment policy](./validation_gate_policy.png)
+<p align="center">
+  <img src="./validation_gate_policy.svg" width="86%" alt="Validation-gated deployment policy">
+</p>
 
 The gate selects SEB-Cal only when held-out validation satisfies:
 
