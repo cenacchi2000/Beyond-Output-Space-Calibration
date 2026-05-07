@@ -1,14 +1,9 @@
-# SEB-Cal: Spectral Evidence Bundling for Selective Reliability Estimation in Time-Series Classification
-
-**Anonymous NeurIPS 2026 artifact** for:
 
 > **Beyond Output-Space Calibration: Spectral Evidence Bundling for Selective Reliability Estimation in Time-Series Classification**
 
 SEB-Cal is a **fixed-label, post-hoc reliability policy** for time-series classifiers. It leaves the trained backbone and predicted class unchanged, then estimates whether that prediction should be trusted by combining output-side calibration cues with deterministic whole-sample spectral evidence.
 
-<p align="center">
-  <img src="readme_results_panel.png" width="92%" alt="SEB-Cal README result panel">
-</p>
+![SEB-Cal README result panel](./readme_results_panel.png)
 
 ---
 
@@ -26,9 +21,7 @@ SEB-Cal targets three time-series-specific gaps:
 
 ## 2. Architecture design
 
-<p align="center">
-  <img src="architecture_overview.png" width="94%" alt="SEB-Cal architecture overview">
-</p>
+![SEB-Cal architecture overview](./architecture_overview.png)
 
 SEB-Cal has two branches:
 
@@ -54,9 +47,7 @@ The paper evaluates SEB-Cal across eight UCR/UEA datasets, eight time-series bac
 
 ### 3.1 Aggregate fixed-label reliability
 
-<p align="center">
-  <img src="main_results_summary.png" width="94%" alt="Aggregate fixed-label reliability summary">
-</p>
+![Aggregate fixed-label reliability summary](./main_results_summary.png)
 
 | Method | ECE ↓ | Brier ↓ | NLL ↓ | Corr-AUROC ↑ | FalseConf@0.9 ↓ | AURC ↓ | Faith. ↑ |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -73,23 +64,17 @@ The paper evaluates SEB-Cal across eight UCR/UEA datasets, eight time-series bac
 
 ### 3.2 Dataset-level regime structure
 
-<p align="center">
-  <img src="dataset_regime_structure.png" width="80%" alt="Dataset-level regime structure">
-</p>
+![Dataset-level regime structure](./dataset_regime_structure.png)
 
 SEB-Cal is intentionally regime-dependent. The strongest positive Corr-AUROC gains are observed on FordA, SelfRegulationSCP1, UWaveGestureLibrary, ECG200, and Wafer. Unfavorable regimes are not hidden failures; they are cases where the validation gate should reject spectral conditioning.
 
 The diagnostic FalseConf@0.9 behavior before gating is shown separately because high-confidence error safety is handled at the policy level:
 
-<p align="center">
-  <img src="falseconf_diagnostic_by_dataset.png" width="88%" alt="FalseConf diagnostic by dataset">
-</p>
+![FalseConf diagnostic by dataset](./falseconf_diagnostic_by_dataset.png)
 
 ### 3.3 Frequency-bundle ablation
 
-<p align="center">
-  <img src="frequency_bundle_ablation.png" width="80%" alt="Frequency-bundle ablation">
-</p>
+![Frequency-bundle ablation](./frequency_bundle_ablation.png)
 
 | Variant | Corr-AUROC ↑ |
 |---|---:|
@@ -108,9 +93,7 @@ This ablation is a **mechanism test for ranking signal**, not a deployment-safet
 
 ### 3.4 Validation-gated deployment policy
 
-<p align="center">
-  <img src="validation_gate_policy.png" width="86%" alt="Validation-gated deployment policy">
-</p>
+![Validation-gated deployment policy](./validation_gate_policy.png)
 
 The gate selects SEB-Cal only when held-out validation satisfies:
 
