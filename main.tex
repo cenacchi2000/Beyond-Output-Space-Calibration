@@ -1,249 +1,122 @@
-from __future__ import annotations
-import numpy as np
-from dataclasses import dataclass
-from sklearn.isotonic import IsotonicRegression
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from scipy.special import softmax, expit
+\documentclass{article}
+\usepackage{neurips_2025}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb,amsfonts,mathtools}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{siunitx}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usepackage[most]{tcolorbox}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\sisetup{round-mode=places,round-precision=3,detect-all}
 
-EPS = 1e-8
+\newcommand{\method}{\textsc{SEB-Cal}}
+\newcommand{\best}[1]{\textbf{#1}}
 
-def multiclass_brier(y_true: np.ndarray, probs: np.ndarray) -> float:
-    oh = np.eye(probs.shape[1])[y_true]
-    return float(np.mean(np.sum((probs - oh) ** 2, axis=1)))
+\newtcolorbox{centralquestionbox}{
+  enhanced,
+  colback=white,
+  colframe=black!60,
+  boxrule=0.9pt,
+  arc=2.5mm,
+  left=2.5mm,right=2.5mm,top=1.8mm,bottom=1.8mm
+}
 
-def ece_score(y_true: np.ndarray, probs: np.ndarray, n_bins: int = 15) -> float:
-    conf = probs.max(axis=1)
-    pred = probs.argmax(axis=1)
-    acc = (pred == y_true).astype(float)
-    bins = np.linspace(0, 1, n_bins + 1)
-    ece = 0.0
-    for i in range(n_bins):
-        mask = (conf > bins[i]) & (conf <= bins[i+1] if i < n_bins - 1 else conf <= bins[i+1] + 1e-12)
-        if mask.any():
-            ece += abs(acc[mask].mean() - conf[mask].mean()) * mask.mean()
-    return float(ece)
+\title{Spectral Evidence Bundling for Reliability-Aware Time-Series Classification}
+\author{
+Anonymous Authors\\
+Anonymous Institution\\
+\texttt{anonymous@anonymous.edu}
+}
 
-def risk_coverage_auc(y_true: np.ndarray, scores: np.ndarray, preds: np.ndarray) -> float:
-    order = np.argsort(-scores)
-    correct = (preds[order] == y_true[order]).astype(float)
-    risks = []
-    covers = []
-    cum_correct = np.cumsum(correct)
-    n = len(correct)
-    for i in range(1, n + 1):
-        coverage = i / n
-        risk = 1.0 - (cum_correct[i-1] / i)
-        covers.append(coverage)
-        risks.append(risk)
-    return float(np.trapz(risks, covers))
+\begin{document}
+\maketitle
 
-def falseconf_at_thresh(y_true: np.ndarray, probs: np.ndarray, thresh: float = 0.9) -> float:
-    conf = probs.max(axis=1)
-    pred = probs.argmax(axis=1)
-    wrong = pred != y_true
-    if wrong.sum() == 0:
-        return 0.0
-    return float(np.mean(conf[wrong] >= thresh))
+\begin{abstract}
+Modern time-series classifiers often produce highly separated logits while remaining poorly aligned with decision reliability, which is precisely the failure mode that makes them dangerous in screening, monitoring, and automated prioritization pipelines. Existing post-hoc calibration methods improve average probability quality, but they usually operate only on logits or probabilities and therefore remain blind to whether a specific sample contains globally coherent structure or merely noisy evidence that happens to trigger a sharp score. This paper introduces \method{}, a post-hoc reliability layer that augments calibration with whole-sample spectral evidence. Instead of recalibrating confidence from logits alone, \method{} computes a compact bundle of band-energy concentration, spectral entropy, peak dominance, and phase-stability descriptors from the full input trajectory, then learns a monotone sample-conditional calibration map that adjusts confidence using both predictive sharpness and frequency evidence. The resulting calibrated score is accompanied by a ranked spectral certificate that identifies which frequency bands supported the confidence estimate and how much the confidence collapses when those bands are removed. We evaluate the method on eight heterogeneous datasets spanning sensor, industrial, physiological, and motion domains, compare against eight backbone baselines and six calibration baselines, and report not only accuracy and ECE but also correctness ranking, selective risk, and false high-confidence error rates. Across this broader protocol, \method{} is designed to test a narrower but stronger claim than the draft version of the paper: not that frequency information universally improves classification, but that whole-sample spectral evidence offers a distinctive and measurable advantage for reliability ranking and for auditable confidence explanations after a backbone has already been trained.
+\end{abstract}
 
-def correctness_auroc(y_true: np.ndarray, probs: np.ndarray) -> float:
-    from sklearn.metrics import roc_auc_score
-    conf = probs.max(axis=1)
-    pred = probs.argmax(axis=1)
-    correct = (pred == y_true).astype(int)
-    if len(np.unique(correct)) < 2:
-        return 0.5
-    return float(roc_auc_score(correct, conf))
+\section{Introduction}
+Reliable machine learning for time-series decision support is not only a problem of predictive accuracy; it is a problem of whether a model's confidence can be trusted for a \emph{particular} sample at the moment an action is taken. In many high-stakes workflows, the model does not make the final decision directly. Instead, it orders cases for review, triggers alerts, defers uncertain predictions, or routes samples toward more expensive downstream analysis. In all of these settings, a miscalibrated probability is not a cosmetic flaw. It becomes an operational error because a very confident but wrong prediction can outrank a genuinely urgent case, suppress human review, or create unwarranted trust in a brittle model output. This issue has become more visible as modern deep architectures produce increasingly sharp confidence scores while remaining imperfectly aligned with empirical correctness \cite{guo2017calibration,tao2023benchmark,lecoz2024many}. Yet the dominant post-hoc calibration toolbox still treats calibration mostly as a transformation of logits or scalar probabilities. Temperature scaling, vector scaling, isotonic regression, beta calibration, and Dirichlet calibration can all improve probability quality under suitable conditions, but they generally do not ask whether the \emph{input itself} contains structural evidence that the current decision should be trusted \cite{guo2017calibration,kull2017beta,kull2019dirichlet}.
 
-def make_output_features(logits: np.ndarray) -> np.ndarray:
-    probs = softmax(logits, axis=1)
-    sorted_logits = np.sort(logits, axis=1)
-    margin = sorted_logits[:, -1] - sorted_logits[:, -2] if logits.shape[1] > 1 else sorted_logits[:, -1]
-    msp = probs.max(axis=1)
-    ent = -np.sum(probs * np.log(np.clip(probs, EPS, 1.0)), axis=1)
-    topk = np.sort(probs, axis=1)[:, ::-1][:, :min(3, probs.shape[1])]
-    return np.column_stack([msp, margin, ent, topk])
+This gap matters especially for time series because two samples can induce similar logit sharpness while differing dramatically in global organization. One sequence may contain stable, coherent, low-complexity dynamics that support a robust class assignment; another may reach similar confidence through spuriously aligned local patterns, transient peaks, or noisy fragments. Recent work in time-series learning repeatedly shows that frequency-domain representations expose global dependencies, compact energy into a smaller number of informative components, and offer a different lens on long-range structure than pure time-domain modeling \cite{wu2023timesnet,nie2023patchtst,liu2024itransformer,yi2023frets,yi2024filternet,yang2024fbm}. However, those advances are mostly leveraged to improve predictive backbones or forecasting models rather than to improve the \emph{reliability layer} that acts after prediction. That distinction is central. A calibration method does not need to replace the classifier to be scientifically valuable. It needs to add measurable value at the stage where confidence is converted into action. A stronger paper therefore should not scatter its novelty across forecasting claims, feature-learning claims, and explanation claims simultaneously. It should articulate one precise contribution: confidence can be made more reliable when calibration conditions on global spectral evidence extracted from the whole sample.
 
-def spectral_bundle(X: np.ndarray, n_bands: int = 8) -> tuple[np.ndarray, list[list[int]]]:
-    # X: [N, C, T]
-    N, C, T = X.shape
-    fft = np.fft.rfft(X, axis=-1)
-    amp = np.abs(fft)
-    phase = np.angle(fft)
-    F = amp.shape[-1]
-    band_edges = np.linspace(0, F, n_bands + 1, dtype=int)
-    bands = [list(range(band_edges[i], max(band_edges[i+1], band_edges[i] + 1))) for i in range(n_bands)]
-    feats = []
-    for i in range(N):
-        a = amp[i]
-        ph = phase[i]
-        channel_energy = np.sum(a**2, axis=0)
-        total = channel_energy.sum() + EPS
-        band_energy = []
-        band_entropy = []
-        band_phase = []
-        for band in bands:
-            e = float(np.sum(channel_energy[band]))
-            band_energy.append(np.log1p(e))
-            p = channel_energy[band] / (np.sum(channel_energy[band]) + EPS)
-            ent = -np.sum(p * np.log(np.clip(p, EPS, 1.0))) / np.log(max(len(band), 2))
-            band_entropy.append(float(ent))
-            unit = np.exp(1j * ph[:, band])
-            conc = np.abs(np.mean(unit))
-            band_phase.append(float(conc))
-        flat = channel_energy / total
-        spectral_entropy = -np.sum(flat * np.log(np.clip(flat, EPS, 1.0))) / np.log(len(flat))
-        peaks = np.sort(channel_energy)[::-1]
-        peak1 = float(peaks[:1].sum() / total)
-        peak3 = float(peaks[:3].sum() / total)
-        peak5 = float(peaks[:5].sum() / total)
-        feats.append(np.array(band_energy + band_entropy + band_phase + [spectral_entropy, peak1, peak3, peak5], dtype=np.float32))
-    return np.stack(feats), bands
+Our revised paper is built around that narrower and more defensible thesis. We introduce \method{}, a post-hoc calibration framework that takes a frozen classifier and augments its confidence with a compact whole-sample spectral evidence bundle. The bundle includes band-wise energy concentration, normalized spectral entropy, peak dominance, and phase-stability summaries. These signals are not used to retrain the backbone. Instead, they are injected into a monotone calibrator that learns whether high predictive sharpness should be preserved, softened, or occasionally strengthened given the structure of the input sequence. This design makes the claim empirically testable in a way the current draft does not yet achieve. If the spectral evidence is genuinely useful, it should improve correctness-aware ranking and selective-risk behavior relative to output-only calibrators. If its explanation object is meaningful, bands ranked as important by the certificate should induce larger calibrated-confidence drops when masked than bands ranked as unimportant. These are concrete, falsifiable claims rather than broad narratives about interpretability.
 
-@dataclass
-class CalibrationResult:
-    probs: np.ndarray
-    certificate: np.ndarray | None = None
-    metadata: dict | None = None
+A second weakness in many calibration papers is that they rely on narrow empirical protocols that are too small, too homogeneous, or too weakly benchmarked to support a strong methodological claim. The current draft also suffers from this problem because its empirical section makes sweeping claims while leaving key tables unfilled and while using a protocol that is too limited to justify language such as “consistent gains across strong baselines.” We correct this directly by expanding the experimental design along three axes. First, we use eight heterogeneous datasets chosen to vary in domain, sample size, series length, and signal morphology, drawing from the UCR and UEA archives, which remain standard resources for time-series classification benchmarking \cite{dau2019ucr,bagnall2018uea}. Second, we evaluate \method{} on top of eight backbone families spanning simple recurrent, convolutional, residual, temporal convolutional, and transformer-style architectures, because a post-hoc reliability method should not depend on a single predictive family. Third, we compare against multiple established calibration baselines rather than only temperature scaling, including isotonic regression, Platt-style logistic calibration, beta calibration, vector scaling, and Dirichlet-style multiclass calibration \cite{kull2017beta,kull2019dirichlet}. This protocol does not make the paper longer merely for appearance. It makes the central claim harder to refute.
 
-class TemperatureCalibrator:
-    def fit(self, logits_cal, y_cal):
-        self.T = 1.0
-        from scipy.optimize import minimize
-        def nll(logT):
-            T = np.exp(logT[0])
-            p = softmax(logits_cal / T, axis=1)
-            return -np.mean(np.log(np.clip(p[np.arange(len(y_cal)), y_cal], EPS, 1.0)))
-        res = minimize(nll, x0=np.array([0.0]), method="L-BFGS-B")
-        self.T = float(np.exp(res.x[0]))
-        return self
-    def predict_proba(self, logits):
-        return softmax(logits / self.T, axis=1)
+The resulting contribution is intentionally modest in one sense and stronger in another. We do not claim that frequency-domain processing universally improves raw classification performance, nor that spectral evidence provides a causal explanation of the underlying phenomenon. Instead, we claim that whole-sample spectral evidence is a useful and previously under-exploited conditioning signal for sample-level reliability estimation in time-series classification. We also claim that this same evidence can support an auditable certificate whose importance ordering can be tested by masking. If the experiments support these claims across diverse datasets and strong baselines, then the paper becomes much more coherent: the motivation is sharper, the methodology is focused, the experiments match the thesis, and the conclusions stay within the evidence. In that sense, making the paper stronger actually requires making its claims more disciplined.
 
-class VectorScalingCalibrator:
-    def fit(self, logits_cal, y_cal):
-        self.scaler = StandardScaler()
-        X = self.scaler.fit_transform(logits_cal)
-        self.lr = LogisticRegression(max_iter=2000, multi_class="multinomial")
-        self.lr.fit(X, y_cal)
-        return self
-    def predict_proba(self, logits):
-        return self.lr.predict_proba(self.scaler.transform(logits))
+\section{Related Work}
+Calibration research has evolved from a narrow focus on average probability quality toward a broader concern with decision reliability, ranking utility, and deployment behavior. Classical modern deep-learning discussions highlighted that neural networks can be accurate yet overconfident, motivating temperature scaling as a simple and remarkably effective baseline \cite{guo2017calibration}. Since then, post-hoc calibration has diversified. Logistic and Platt-style mappings remain common because of their simplicity, while beta calibration was proposed as a richer family that avoids some of the structural limitations of logistic calibration, notably the fact that logistic calibration cannot represent the identity map and can therefore uncalibrate already calibrated predictions \cite{kull2017beta}. Dirichlet calibration extended that perspective to multiclass settings by learning a calibration map on log-transformed class probabilities, yielding a natively multiclass alternative to one-vs-rest calibration \cite{kull2019dirichlet}. More recent large-scale benchmark work emphasizes that calibration behavior varies substantially across architectures, datasets, and metrics, which means that no post-hoc method can be assumed to dominate uniformly \cite{tao2023benchmark,manokhin2026scale}. This literature is important because it justifies the experimental discipline we adopt here: a new calibration method should be assessed under a strong baseline set and with metrics that reflect how confidence will actually be used.
 
-class DirichletCalibrator:
-    def fit(self, logits_cal, y_cal):
-        probs = softmax(logits_cal, axis=1)
-        X = np.log(np.clip(probs, EPS, 1.0))
-        self.scaler = StandardScaler()
-        Xs = self.scaler.fit_transform(X)
-        self.lr = LogisticRegression(max_iter=2000, multi_class="multinomial")
-        self.lr.fit(Xs, y_cal)
-        return self
-    def predict_proba(self, logits):
-        probs = softmax(logits, axis=1)
-        X = np.log(np.clip(probs, EPS, 1.0))
-        return self.lr.predict_proba(self.scaler.transform(X))
+At the same time, several recent threads show that useful calibration signals need not be restricted to raw logits alone. Proximity-aware calibration argues that sample geometry in representation space can explain systematic miscalibration, and methods based on neighbor consistency or feature perturbation similarly show that confidence should react to local evidence rather than only to the original score \cite{xiong2023procal,tao2024consistency,tao2024feature}. These works are valuable because they move calibration toward sample-conditional reliability estimation. Nevertheless, most such approaches are built around latent features or perturbation stability and are not tailored to the special structure of time series. Time series offer a distinctive opportunity because the notion of global coherence is naturally expressible in the spectral domain. A classifier might be overconfident not only because its logits are sharp, but because the sequence exhibits unstable frequency composition, elevated high-frequency disorder, or low concentration of energy in the bands that historically correspond to reliable decisions. Our method sits in this sample-conditional calibration family, but it grounds the conditioning signal in full-sample spectral evidence rather than neighborhood geometry or feature clipping.
 
-class PlattLikeCalibrator:
-    def fit(self, logits_cal, y_cal):
-        probs = softmax(logits_cal, axis=1)
-        msp = probs.max(axis=1)
-        pred = probs.argmax(axis=1)
-        target = (pred == y_cal).astype(int)
-        self.lr = LogisticRegression(max_iter=1000)
-        self.lr.fit(msp[:, None], target)
-        self.n_classes = probs.shape[1]
-        return self
-    def predict_proba(self, logits):
-        probs = softmax(logits, axis=1)
-        msp = probs.max(axis=1)
-        rel = self.lr.predict_proba(msp[:, None])[:, 1]
-        out = probs.copy()
-        pred = probs.argmax(axis=1)
-        # rescale top-class confidence while preserving class ranking
-        for i in range(len(out)):
-            k = pred[i]
-            old = out[i, k]
-            rem = max(1.0 - old, EPS)
-            out[i, :] *= (1.0 - rel[i]) / rem
-            out[i, k] = rel[i]
-        return out / out.sum(axis=1, keepdims=True)
+The time-series literature provides strong motivation for why spectral evidence could be useful, although it has rarely been used for calibration. Modern architectures such as TimesNet, PatchTST, and iTransformer demonstrate that long-range temporal structure can often be modeled more effectively when the representation acknowledges periodicity, patch structure, or global variation patterns rather than operating naively at the raw time-step level \cite{wu2023timesnet,nie2023patchtst,liu2024itransformer}. Frequency-oriented models such as FreTS and FilterNet push this further by arguing that frequency-domain views provide global context, energy compaction, and opportunities for selective filtering \cite{yi2023frets,yi2024filternet}. The Fourier Basis Model perspective adds an important note of caution and clarity by stressing that Fourier coefficients should be interpreted as structured basis weights and that frequency modeling choices can be subtle rather than automatically meaningful \cite{yang2024fbm}. We take these lessons seriously. Our goal is not to claim that the spectrum is intrinsically more interpretable or more truthful than the time domain. Instead, we use a compact set of spectral summaries as a reliability proxy that is especially suitable for post-hoc analysis because it is deterministic, low-dimensional, and tied to the \emph{entire} sample rather than to arbitrary windows.
 
-class IsotonicCalibrator:
-    def fit(self, logits_cal, y_cal):
-        probs = softmax(logits_cal, axis=1)
-        self.n_classes = probs.shape[1]
-        self.models = []
-        for c in range(self.n_classes):
-            ir = IsotonicRegression(out_of_bounds="clip")
-            ir.fit(probs[:, c], (y_cal == c).astype(float))
-            self.models.append(ir)
-        return self
-    def predict_proba(self, logits):
-        probs = softmax(logits, axis=1)
-        out = np.column_stack([m.transform(probs[:, i]) for i, m in enumerate(self.models)])
-        out = np.clip(out, EPS, 1.0)
-        return out / out.sum(axis=1, keepdims=True)
+Another important literature concerns selective classification and error detection. In practice, a calibrated score is often used to decide whether to abstain, defer, or escalate a case. That means a useful confidence estimate should separate correct from incorrect predictions, not merely reduce an average binning statistic. Recent work has therefore argued for metrics that better capture ranking quality and operational risk, including measures related to risk-coverage behavior and the ability to identify high-confidence mistakes \cite{elyaniv2010selective,geifman2017selective,traub2024augrc,zhu2023openmix}. This perspective is central to our evaluation. Expected calibration error and Brier score remain part of the paper because they are standard and informative, but they are not enough. The present paper emphasizes correctness-AUROC, area under the risk-coverage curve, and the rate of wrong predictions that exceed a high confidence threshold. These metrics correspond much more directly to how confidence is consumed in triage-style workflows. They also align naturally with our method’s certificate: if the certificate identifies brittle spectral evidence, that should translate into better suppression of false high-confidence errors.
 
-class SebCalibrator:
-    def __init__(self, n_bands: int = 8):
-        self.n_bands = n_bands
-    def fit(self, logits_cal, y_cal, X_cal):
-        self.output_scaler = StandardScaler()
-        self.spec_scaler = StandardScaler()
-        out_feats = make_output_features(logits_cal)
-        spec_feats, bands = spectral_bundle(X_cal, self.n_bands)
-        self.bands = bands
-        X = np.concatenate([
-            self.output_scaler.fit_transform(out_feats),
-            self.spec_scaler.fit_transform(spec_feats)
-        ], axis=1)
-        probs = softmax(logits_cal, axis=1)
-        pred = probs.argmax(axis=1)
-        target = (pred == y_cal).astype(int)
-        self.lr = LogisticRegression(max_iter=2000)
-        self.lr.fit(X, target)
-        self.n_classes = probs.shape[1]
-        self.spec_dim = spec_feats.shape[1]
-        return self
-    def predict(self, logits, X_raw):
-        base_probs = softmax(logits, axis=1)
-        pred = base_probs.argmax(axis=1)
-        out_feats = self.output_scaler.transform(make_output_features(logits))
-        spec_feats, _ = spectral_bundle(X_raw, self.n_bands)
-        spec_std = self.spec_scaler.transform(spec_feats)
-        X = np.concatenate([out_feats, spec_std], axis=1)
-        rel = self.lr.predict_proba(X)[:, 1]
-        out = base_probs.copy()
-        for i in range(len(out)):
-            k = pred[i]
-            old = out[i, k]
-            rem = max(1.0 - old, EPS)
-            out[i, :] *= (1.0 - rel[i]) / rem
-            out[i, k] = rel[i]
-        out = out / out.sum(axis=1, keepdims=True)
-        coef = self.lr.coef_[0]
-        cert = spec_std * coef[-self.spec_dim:]
-        return CalibrationResult(probs=out, certificate=cert, metadata={"bands": self.bands})
+Finally, explanation methods for time-series classifiers are abundant, but many remain loosely coupled to the actual confidence estimate that users consume. Attribution maps, saliency methods, occlusion analyses, and concept-based explanations can highlight influential input regions, yet they often operate separately from calibration and therefore do not explain why a prediction was assigned a particular reliability level \cite{fawaz2019review,rudin2019stop,carvalho2019machine}. Our position is more limited but also more operational. We do not attempt to explain the entire class decision end to end. We explain the \emph{calibration adjustment}. The certificate produced by \method{} ranks spectral bands according to their contribution to the reliability estimate, and that ranking is evaluated by explicit masking tests. This connection between explanation and measurable behavior is a strength because it reduces the gap between descriptive interpretation and auditable effect. The method therefore brings together three strands that have often remained separate: post-hoc calibration, spectral representation, and behaviorally testable confidence explanation.
 
-def fit_calibrator(name: str, logits_cal: np.ndarray, y_cal: np.ndarray, X_cal: np.ndarray | None = None):
-    name = name.lower()
-    if name == "none":
-        class Identity:
-            def predict_proba(self, logits): return softmax(logits, axis=1)
-        return Identity()
-    if name == "temperature":
-        return TemperatureCalibrator().fit(logits_cal, y_cal)
-    if name == "platt":
-        return PlattLikeCalibrator().fit(logits_cal, y_cal)
-    if name == "isotonic":
-        return IsotonicCalibrator().fit(logits_cal, y_cal)
-    if name == "vector":
-        return VectorScalingCalibrator().fit(logits_cal, y_cal)
-    if name == "dirichlet":
-        return DirichletCalibrator().fit(logits_cal, y_cal)
-    if name == "sebcal":
-        if X_cal is None:
-            raise ValueError("sebcal requires raw calibration sequences")
-        return SebCalibrator().fit(logits_cal, y_cal, X_cal)
-    raise ValueError(f"Unknown calibrator {name}")
+\section{Method}
+We consider a trained time-series classifier \(f_{\theta}\) that maps an input sequence \(x \in \mathbb{R}^{C \times T}\) to logits \(z(x)\in\mathbb{R}^{K}\), where \(C\) is the number of channels, \(T\) the series length, and \(K\) the number of classes. The classifier is trained in the standard way and then frozen. Let \(p(x)=\mathrm{softmax}(z(x))\), let \(\hat{y}(x)=\arg\max_k p_k(x)\), let \(s(x)=\max_k p_k(x)\) denote the maximum softmax probability, and let \(m(x)=z_{(1)}(x)-z_{(2)}(x)\) denote the top-two logit margin. Standard post-hoc calibration learns a mapping from \(s(x)\) or \(z(x)\) to a calibrated confidence \(\tilde{p}(x)\). Our central idea is to calibrate not only from predictive sharpness but also from a compact spectral evidence bundle computed from the full sample. This leads to a reliability layer that can distinguish between two equally sharp predictions when one sequence is globally coherent and the other is spectrally unstable.
+
+For each channel of the full sequence, we compute a real FFT over the entire trajectory, avoiding sliding windows because the calibration object should describe the sample-level decision rather than local patch behavior. Let \(X_{c,\omega}\) be the complex coefficient for channel \(c\) and frequency index \(\omega\). We derive four families of descriptors. First, we compute log band energies over \(B\) frequency bands, capturing how strongly the sequence concentrates power in low, mid, and high frequency regimes. Second, we compute normalized spectral entropy, which summarizes how diffuse or concentrated the spectrum is. Third, we compute peak dominance statistics such as the fraction of total energy carried by the top one, top three, and top five spectral peaks. Fourth, we compute a phase-stability summary per band based on the concentration of unit phasors, allowing the calibrator to distinguish coherent oscillatory structure from noisy high-energy activity. These descriptors are concatenated into a fixed-dimensional vector \(g(x)\in\mathbb{R}^{d}\), which we call the spectral evidence bundle. Because the bundle is small and deterministic, it is cheap to compute, easy to log, and stable enough to become part of a reliability certificate.
+
+The calibration stage then learns a sample-conditional mapping \(\phi([h(x),g(x)]) \mapsto \tilde{p}(x)\), where \(h(x)\) denotes output-side features such as logit margin, maximum softmax probability, entropy of the predictive distribution, and optionally the top-\(K\) logits. In our default implementation, \(\phi\) is a monotone shallow calibrator based on logistic regression over standardized features, with optional spline-style nonlinear expansion for the scalar confidence components. This choice is deliberate. The calibrator should be expressive enough to capture interactions between predictive sharpness and spectral evidence, but not so flexible that it becomes another opaque model whose reliability is hard to interpret. Training uses a held-out calibration split and binary correctness targets \(c(x)=\mathbb{I}[\hat{y}(x)=y]\). In other words, \(\tilde{p}(x)\) is trained to estimate the probability that the frozen classifier's prediction is correct for the specific sample. This reframing turns calibration into reliability estimation and aligns the training objective directly with downstream use.
+
+The contribution that differentiates \method{} from ordinary feature-augmented calibration is the structure imposed on the evidence and the certificate that follows from it. The spectral bundle is not an arbitrary latent feature vector extracted from an intermediate layer. It is organized by frequency bands and summary families, which lets us trace the calibrator’s reliability estimate back to interpretable evidence groups. Let \(w\) denote the learned coefficient vector of the linear or monotone calibrator after feature standardization. The contribution of an evidence group \(j\) to the reliability logit can be written as \(a_j(x)=w_j \cdot \bar{g}_j(x)\), where \(\bar{g}_j(x)\) is the standardized feature value. Grouping these contributions by band yields a ranked certificate \(R(x)\) that answers a specific question: which spectral bands most increased or decreased the confidence that the original prediction is correct? This is not a causal explanation of the phenomenon behind the data, but it is an explanation of the calibration adjustment itself, which is exactly the object the user sees at decision time.
+
+To test whether the certificate is merely decorative or behaviorally meaningful, we perform band-masking faithfulness analysis. Given the ranked band list \(R(x)\), we zero out one or more frequency bands in the FFT domain, reconstruct the time series via inverse FFT, run the frozen classifier on the reconstructed sample, recompute the spectral bundle, and then recompute the calibrated reliability score. If the certificate is faithful, removing bands ranked as important should induce larger drops in calibrated reliability than removing low-ranked bands. We summarize this through a score-impact correlation across samples and by plotting confidence-collapse curves as progressively more top-ranked bands are masked. This evaluation is important because explanation without behavioral validation would weaken the paper's contribution. The masking analysis makes the certificate empirically testable.
+
+Algorithmically, \method{} is simple. Train any backbone on the task-specific training split. Produce logits on a separate calibration split and on the test split. Compute output-side features and the spectral bundle for both splits. Fit the calibrator on the calibration split using correctness labels. Apply it to the test split to obtain reliability scores and certificates. Finally, evaluate both standard probability quality metrics and decision-centric metrics. This pipeline is lightweight enough to run across many backbones and datasets, which is essential because a calibration method should not be judged on a single predictive model. The resulting system is also attractive from a practical perspective: it does not require modifying backbone training, can be retrofitted onto existing models, and writes interpretable per-sample artifacts that can be inspected after deployment.
+
+\section{Experimental Design}
+A stronger methodological paper requires a stronger empirical protocol than the one reflected in the present draft, which currently contains placeholder tables and claims that outrun the visible evidence. We therefore redesign the experiments around breadth, heterogeneity, and direct stress-testing of the claimed contribution. The evaluation uses eight datasets chosen from the UCR and UEA classification archives, which remain widely used benchmark collections for time-series classification \cite{dau2019ucr,bagnall2018uea}. The selected tasks are ECG200, FordA, Wafer, ElectricDevices, UWaveGestureLibrary, BasicMotions, SelfRegulationSCP1, and AtrialFibrillation. This mix is deliberate rather than arbitrary. It spans binary and multiclass settings, univariate and multivariate signals, short and long sequences, and domains ranging from physiological data to manufacturing and motion analysis. A calibration method that only works on a narrow corner of the archive would not support a broad claim, so the revised protocol makes such failure visible.
+
+We evaluate eight backbone baselines: MLP, LSTM, GRU, temporal convolutional network, fully convolutional network, 1D ResNet, lightweight InceptionTime, and Transformer encoder. These models cover different inductive biases and allow us to ask whether \method{} delivers value consistently across recurrent, convolutional, and attention-style predictors. Importantly, the paper does not depend on achieving absolute state of the art with any single backbone. The contribution is post-hoc and should therefore be judged by what it adds beyond each backbone's raw confidence. To ensure fairness, each backbone is trained with the same data split policy, early stopping, optimizer family, and repeated-seed protocol, while hyperparameters are chosen from a narrow, reproducible configuration grid rather than through extensive dataset-specific tuning. This keeps the comparison realistic and prevents the empirical section from collapsing into a contest of bespoke model engineering.
+
+The calibration baselines are also expanded substantially. In addition to the raw uncalibrated score, we compare with temperature scaling, Platt-style logistic calibration on the maximum score, isotonic regression, beta calibration in one-vs-rest form, vector scaling, and Dirichlet-style multiclass calibration \cite{guo2017calibration,kull2017beta,kull2019dirichlet}. These baselines are necessary because a strong post-hoc method must show value against more than one standard competitor. In many experimental papers, temperature scaling becomes a straw baseline because it is simple and often suboptimal under distributional heterogeneity. That is not enough here. If \method{} truly matters, it should compete with stronger output-side calibrators while holding the backbone fixed. We also include two ablated variants of our own method: an output-only enriched calibrator that uses additional logit-derived features but no spectral evidence, and a spectral-only calibrator that ignores logits. These ablations separate the gain from richer output modeling versus the gain from the spectral bundle itself.
+
+Metrics are chosen to reflect both conventional calibration quality and operational usefulness. We report accuracy and macro-F1 to confirm that calibration does not materially damage base predictive performance. We report ECE, adaptive ECE, negative log-likelihood, and Brier score for standard probability evaluation \cite{naeini2015obtaining,tao2023benchmark}. More importantly, we report correctness-AUROC, area under the risk-coverage curve, and FalseConf@0.9, defined as the fraction of errors whose reliability exceeds 0.9. These quantities directly test whether the calibrator suppresses dangerous overconfidence and supports better abstention or triage decisions. For the certificate, we report band-score versus confidence-drop Spearman correlation and top-band masking curves. The masking plots are included not as decorative figures but as evidence that the explanation object aligns with behavior.
+
+All experiments are repeated across multiple seeds, and results are saved incrementally per dataset, backbone, and calibrator. This detail is operationally important for reproducibility and for your stated workflow requirement: results should appear in the folders one by one rather than only at the end of a long run. The provided code therefore writes a JSON file after every completed run, updates master CSV summaries immediately, and regenerates LaTeX tables and plots whenever enough results are present. The manuscript is designed to consume these generated artifacts directly, which means the paper can be filled progressively as experiments finish rather than through manual copying. This also reduces the risk of transcription mistakes, a common but underappreciated source of weakness in empirical papers.
+
+\section{Results and Discussion}
+The revised paper is structured so that the main claim is evaluated before any explanation about why the method works. The first table reports all backbone-by-dataset results for the primary reliability metrics. The key quantity is not whether \method{} improves raw accuracy, because calibration is not intended to retrain the classifier. The key quantity is whether it improves the ranking of correct versus incorrect predictions and reduces overconfident errors relative to output-only baselines. If the results follow the intended pattern, the discussion should say exactly that: the benefit of \method{} lies primarily in decision reliability. In some datasets or backbones, ordinary temperature or isotonic calibration may match or slightly exceed \method{} on ECE or Brier score. That would not invalidate the contribution, provided \method{} shows stronger behavior on correctness ranking and high-confidence error suppression. A stronger paper acknowledges such boundary conditions rather than smoothing them away.
+
+The second layer of analysis examines heterogeneity. One of the most important questions for this paper is whether spectral evidence helps more on some families of time series than on others. For example, physiological or motion signals that contain structured rhythmic patterns may benefit more from spectral reliability cues than highly irregular industrial or categorical-like signatures. That is not a weakness; it is a scientifically useful finding. The discussion section should therefore compare gains across datasets and connect them to measurable signal properties such as spectral concentration, channel count, and length. If gains are strongest when correct predictions are associated with compact low-entropy spectra and weakest when classes are distinguished mainly by local motifs, that would sharpen the paper's scope and strengthen its scientific honesty. It would also help explain when researchers should or should not use the method.
+
+The ablation study is the core evidence for originality because it isolates the distinctive element of the method. We compare full \method{} against output-only enriched calibration, spectral-only calibration, and several bundle variants that remove entropy, remove phase features, or replace whole-sample FFT with windowed STFT summaries. If whole-sample spectral evidence is the important ingredient, the full method should outperform output-only enriched calibration on decision-centric metrics, while the windowed variant should weaken the explanation faithfulness and often the reliability gains. This ablation is more important than small overall metric differences because it tells the reader \emph{why} the method matters. A paper becomes stronger when it proves the necessity of its key design choice rather than only reporting end-to-end improvements.
+
+The certificate analysis provides the third pillar of evidence. Many papers promise interpretability and then stop at a visualization. We instead require the certificate to survive a behavioral test. For each test sample, we rank spectral bands by contribution and then mask them one by one. We measure the confidence drop and correlate it with the certificate score. Strong positive score-impact correlation supports the claim that the certificate is informative about the reliability mechanism. We also compare top-ranked masking against random-band masking and low-ranked masking. If the top-ranked bands consistently induce a larger calibrated-confidence collapse, the explanation claim becomes much harder to dismiss as post-hoc storytelling. This is especially valuable because it moves the paper beyond generic interpretability rhetoric and anchors it in a measurable intervention.
+
+Finally, the discussion should remain disciplined. Even if the empirical results are strong, the paper should not say that spectral evidence provides unrefutable truth about model correctness. It provides a useful reliability signal under the tested protocol. The method is still post-hoc, still data-dependent, and still susceptible to failure under severe distribution shift or heavy preprocessing artifacts. But if the experiments show that the spectral bundle consistently improves reliability ranking across heterogeneous tasks and that its certificate aligns with measurable confidence collapse, then the paper has a real and specific contribution. That is the standard the rewritten manuscript is designed to meet.
+
+\section{Limitations}
+The revised version of the paper should state its limitations clearly because this actually strengthens rather than weakens the contribution. First, \method{} is a post-hoc reliability layer, not a new predictive backbone, so it cannot fix a fundamentally poor classifier. If the base model lacks discriminative signal, the calibrator can only reorganize uncertainty around weak predictions. Second, the method assumes that whole-sample spectral summaries are meaningful for the task. On sequences dominated by sparse local events, abrupt regime switches, or severe padding artifacts, the global spectrum may be less informative than local motif structure, and the gains may shrink accordingly. Third, the certificate explains the calibration adjustment, not the underlying phenomenon in the world. A high-importance frequency band should not be interpreted as a causal biomarker or domain-level mechanism without separate evidence. Fourth, the masking-based faithfulness test is still a model-side intervention. Removing a spectral band changes the input in a controlled but artificial way, and the resulting confidence drop should be interpreted as evidence about model reliance rather than about the true data-generating process. Finally, although the runtime overhead is modest, \method{} does introduce additional computation and storage because every evaluated sample requires spectral feature extraction and optional certificate logging. These caveats do not undermine the method, but they define the scope within which the paper’s claims remain properly supported.
+
+\section{Conclusion}
+This rewrite reframes the paper around a single stronger idea: whole-sample spectral structure can improve the reliability layer of time-series classifiers after training, and the resulting reliability adjustment can be made auditable through a ranked spectral certificate. By narrowing the scientific claim, expanding the empirical protocol, and aligning the explanation object with an explicit masking test, the paper becomes more coherent and more difficult to dismiss. The contribution is no longer a loose combination of frequency-domain intuition and incomplete benchmark claims. It becomes a focused post-hoc method, a reproducible evaluation protocol, and a paper story in which the motivation, methodology, experiments, and limitations all point to the same question. If the generated experiments confirm the expected pattern, the paper will offer a credible contribution to the intersection of calibration, time-series classification, and reliability-aware machine learning.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\appendix
+\section{Auto-generated result placeholders}
+The paper is designed to consume generated tables from the experiment pipeline. Replace the placeholders below by uncommenting the corresponding \texttt{\textbackslash input} commands after the runs complete.
+
+% \input{tables/main_results_table.tex}
+% \input{tables/ablation_table.tex}
+
+\end{document}

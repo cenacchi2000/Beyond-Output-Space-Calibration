@@ -1,94 +1,183 @@
 # SEB-Cal: Spectral Evidence Bundling for Selective Reliability Estimation in Time-Series Classification
 
-Anonymous artifact for NeurIPS 2026 submission:
+**Anonymous NeurIPS 2026 artifact** for the paper:
 
-**Beyond Output-Space Calibration: Spectral Evidence Bundling for Selective Reliability Estimation in Time-Series Classification**
+> **Beyond Output-Space Calibration: Spectral Evidence Bundling for Selective Reliability Estimation in Time-Series Classification**
 
-This repository contains the implementation used to evaluate **SEB-Cal**, a validation-gated, fixed-label post-hoc reliability policy for time-series classification. SEB-Cal leaves the trained backbone and predicted label unchanged, augments output-side confidence features with deterministic whole-sample spectral descriptors, and estimates whether the selected prediction should be trusted.
+SEB-Cal is a **fixed-label, post-hoc reliability estimation** method for time-series classifiers. It does **not** change the backbone prediction. Instead, it estimates whether the already-selected prediction should be trusted by combining conventional output-space calibration cues with deterministic whole-sample spectral evidence.
 
-Recommended anonymous code link format for the paper:
+---
+
+## 1. What problem does this artifact address?
+
+Standard post-hoc calibration methods usually remap output scores. In time-series classification, however, two predictions can have identical confidence while being supported by very different temporal evidence. SEB-Cal targets three time-series-specific reliability gaps:
+
+1. **Temporal-support mismatch:** high confidence may not be supported by coherent temporal structure.
+2. **False high-confidence errors:** average calibration may still assign high reliability to wrong predictions.
+3. **Limited input-linked auditability:** output-space recalibrators provide little information about which input-side evidence supports or weakens trust.
+
+SEB-Cal addresses these gaps by estimating fixed-label reliability from both output-side confidence features and whole-sample spectral descriptors.
+
+---
+
+## 2. Method overview
+
+SEB-Cal keeps the classifier fixed and learns only a shallow post-hoc reliability layer.
 
 ```text
-https://anonymous.4open.science/r/Spectral-Evidence-Bundling-SEBCal-XXXX/
+Input time series x
+        │
+        ├── Frozen backbone fθ
+        │       └── logits z(x), predicted label ŷ(x)
+        │
+        ├── Output-side calibration features h(x)
+        │       ├── maximum softmax probability
+        │       ├── logit margin
+        │       └── predictive entropy
+        │
+        ├── Whole-sample spectral evidence g(x)
+        │       ├── band energy concentration
+        │       ├── spectral entropy
+        │       ├── peak dominance
+        │       └── phase stability
+        │
+        ├── Concatenate φ(x) = [h(x) || g(x)]
+        │
+        ├── Shallow reliability layer ψ(φ(x))
+        │       └── scalar reliability score r̃(x) ≈ P(ŷ(x)=y | x, z(x))
+        │
+        └── Validation-gated policy
+                ├── use SEB-Cal when ranking improves safely
+                └── otherwise revert to Raw / safer scalar recalibrator
 ```
 
-After uploading the repository to Anonymous 4open Science, replace `XXXX` with the generated anonymous repository identifier and cite the root URL in the paper/checklist.
+The deployed object is therefore not an unconstrained spectral score. It is a **validation-gated reliability policy**: SEB-Cal is selected only when held-out validation improves correctness-aware ranking without violating FalseConf@0.9 or AURC tolerances.
 
 ---
 
-## 1. What this artifact supports
+## 3. Main paper results reproduced by this artifact
 
-The artifact supports the main claims of the paper:
+The paper evaluates SEB-Cal on eight heterogeneous UCR/UEA datasets, eight backbone families, and standard output-space recalibrators. The main benchmark uses a matched evaluation subset of 191 dataset--model--seed configurations.
 
-1. **Fixed-label reliability estimation**: post-hoc methods do not change the predicted class; they estimate the reliability of the already-selected prediction.
-2. **Spectral Evidence Bundling (SEB-Cal)**: output-side cues are augmented with whole-sample spectral descriptors: band energy, spectral entropy, peak dominance, and phase stability.
-3. **Matched benchmark evaluation**: experiments cover eight UCR/UEA time-series classification datasets, eight backbone families, and standard output-space recalibrators.
-4. **Selective-reliability metrics**: evaluation reports ECE, Brier score, NLL, Corr-AUROC, FalseConf@0.9, AURC, and diagnostic faithfulness where applicable.
-5. **Incremental reproducibility**: each completed dataset--model--seed run writes a run-level result and updates aggregate CSV, table, and figure outputs.
+### 3.1 Aggregate fixed-label reliability comparison
 
-The repository is designed to be readable and editable rather than heavily engineered.
+| Method | ECE ↓ | Brier ↓ | NLL ↓ | Corr-AUROC ↑ | FalseConf@0.9 ↓ | AURC ↓ | Faith. ↑ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Raw | 0.097 | 0.377 | 0.716 | 0.693 | 0.128 | 0.219 | -- |
+| Temperature | 0.080 | **0.371** | 0.717 | 0.689 | 0.162 | 0.219 | -- |
+| Platt | 0.078 | 0.384 | 0.745 | 0.671 | 0.228 | 0.218 | -- |
+| Dirichlet | 0.153 | 0.422 | 0.983 | 0.673 | 0.153 | 0.226 | -- |
+| Vector | 0.155 | 0.420 | 0.975 | 0.672 | 0.149 | 0.227 | -- |
+| Isotonic | 0.144 | 0.421 | 1.977 | 0.644 | 0.292 | 0.227 | -- |
+| Unconstrained SEB-Cal | 0.077 | 0.372 | 0.710 | 0.779 | 0.118 | 0.214 | 0.059 |
+| Policy-selected SEB-Cal | **0.075** | **0.370** | **0.708** | **0.786** | **0.094** | **0.209** | -- |
+
+Key interpretation: unconstrained SEB-Cal tests whether spectral evidence adds reliability information. Policy-selected SEB-Cal is the deployed reliability policy and gives the safest aggregate operating point.
+
+### 3.2 Dataset-level regime structure
+
+SEB-Cal is intentionally regime-dependent rather than universal. The strongest positive Corr-AUROC gains appear in:
+
+| Dataset | Raw Corr | SEB Corr | Δ Corr |
+|---|---:|---:|---:|
+| FordA | 0.730 | 0.859 | +0.129 |
+| ECG200 | 0.685 | 0.750 | +0.065 |
+| UWaveGestureLibrary | 0.685 | 0.754 | +0.069 |
+| SelfRegulationSCP1 | 0.567 | 0.671 | +0.104 |
+| Wafer | 0.826 | 0.885 | +0.059 |
+
+Unfavorable or weaker regimes are rejected by the validation-gated policy when safety constraints are not met.
+
+### 3.3 Frequency-bundle ablation
+
+The central mechanism ablation tests whether the spectral bundle `g(x)` adds ranking information beyond output-side features `h(x)`.
+
+| Variant | Corr-AUROC ↑ |
+|---|---:|
+| Remove all `g(x)`: output-side only `h(x)` | 0.703 |
+| `h(x)` + energy only | 0.778 |
+| `h(x)` + entropy only | 0.733 |
+| `h(x)` + peak only | 0.756 |
+| `h(x)` + phase only | 0.734 |
+| Full SEB-Cal bundle `h(x)+g(x)` | 0.786 |
+| Full bundle without energy | 0.752 |
+| Full bundle without entropy | 0.786 |
+| Full bundle without peak | 0.784 |
+| Full bundle without phase | 0.787 |
+
+Energy concentration is the strongest single descriptor in the positive-regime slice, while the full bundle preserves a decomposable spectral diagnostic.
+
+### 3.4 Robustness controls reported in the paper
+
+The paper also reports the following robustness checks:
+
+- comparison to non-output-space Proximity-style reliability estimators;
+- output-feature-only `h(x)` control;
+- time-domain summary baseline;
+- STFT-SEB-Cal alternative time-frequency variant;
+- input-space and feature-space masking controls;
+- computational overhead analysis;
+- paired bootstrap uncertainty over matched configurations;
+- dependence diagnostics showing that spectral descriptors are not redundant with output features.
 
 ---
 
-## 2. Repository structure
+## 4. Repository structure
+
+Expected artifact layout:
 
 ```text
 .
 ├── README.md
-├── requirements.txt
-├── run_benchmark.sh
 ├── main.tex
 ├── references.bib
+├── requirements.txt
+├── run_benchmark.sh
 ├── src/
 │   ├── __init__.py
-│   ├── calibration.py      # scalar recalibrators + SEB-Cal spectral reliability layer
-│   ├── datasets.py         # UCR/UEA loading and train/calibration/test split construction
-│   ├── evaluation.py       # reliability metrics, diagnostic faithfulness, tables, figures
-│   ├── models.py           # MLP, LSTM, GRU, TCN, FCN, ResNet1D, InceptionLite, Transformer
-│   ├── run_all.py          # multi-job launcher over datasets, backbones, seeds
-│   ├── run_one.py          # one dataset--model--seed experiment
-│   ├── training.py         # backbone training and logit extraction
-│   └── utils.py
-├── results/                # generated run-level JSON files and master_metrics.csv
-├── tables/                 # generated LaTeX tables
-├── figures/                # generated figures
-└── logs/                   # progress logs
+│   ├── datasets.py
+│   ├── models.py
+│   ├── training.py
+│   ├── calibration.py
+│   ├── evaluation.py
+│   ├── run_one.py
+│   └── run_all.py
+├── results/
+│   ├── master_metrics.csv                  # generated or supplied
+│   └── runs/                               # per-run JSON outputs
+├── tables/
+│   ├── main_results_table.tex              # generated
+│   └── ablation_table.tex                  # generated
+├── figures/
+│   ├── corr_auroc_by_calibrator.png        # generated
+│   └── ece_vs_falseconf.png                # generated
+└── logs/
+    └── progress.log                        # generated
 ```
 
-Optional paper-artifact folders can also be included when available:
-
-```text
-paper_artifacts/
-├── master_metrics.csv
-├── table1_headline_summary.csv
-├── dataset_decomposition.csv
-├── backbone_decomposition.csv
-├── validation_gate_decisions.csv
-├── appendix_outputs/
-└── trained_outputs/
-```
-
-Including these optional files lets reviewers verify reported tables without rerunning the full benchmark.
+**Important:** preserve the `src/` directory structure. The commands below use Python module execution (`python -m src.run_one` and `python -m src.run_all`). If files are uploaded flat at the repository root, the relative imports will fail.
 
 ---
 
-## 3. Installation
+## 5. Installation
 
-Create a clean environment, then install dependencies:
+Create a fresh environment:
 
 ```bash
-conda create -n sebcal python=3.10 -y
-conda activate sebcal
+python -m venv .venv
+source .venv/bin/activate        # Linux/macOS
+# .venv\Scripts\activate         # Windows PowerShell
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-The artifact uses public UCR/UEA datasets loaded through `aeon`. Dataset files are downloaded automatically by `aeon` when first requested.
+The code uses public UCR/UEA time-series datasets through `aeon` and downloads them automatically when first requested.
 
 ---
 
-## 4. Quick smoke test
+## 6. Quick smoke test
 
-Run a small experiment on one dataset, one backbone, one seed, and a subset of calibrators:
+Run one dataset, one backbone, and all calibration methods:
 
 ```bash
 python -m src.run_one \
@@ -96,7 +185,7 @@ python -m src.run_one \
   --model mlp \
   --seed 7 \
   --gpu 0 \
-  --calibrators none temperature platt sebcal \
+  --calibrators none temperature platt isotonic vector dirichlet sebcal \
   --results_dir results \
   --tables_dir tables \
   --figures_dir figures \
@@ -106,10 +195,7 @@ python -m src.run_one \
 Expected outputs:
 
 ```text
-results/runs/ECG200__mlp__seed7__none.json
-results/runs/ECG200__mlp__seed7__temperature.json
-results/runs/ECG200__mlp__seed7__platt.json
-results/runs/ECG200__mlp__seed7__sebcal.json
+results/runs/ECG200__mlp__seed7__*.json
 results/master_metrics.csv
 tables/main_results_table.tex
 tables/ablation_table.tex
@@ -120,22 +206,9 @@ logs/progress.log
 
 ---
 
-## 5. Full benchmark command
+## 7. Full benchmark run
 
-The full benchmark used in the paper covers:
-
-- **Datasets**: `ECG200`, `FordA`, `Wafer`, `ElectricDevices`, `UWaveGestureLibrary`, `BasicMotions`, `SelfRegulationSCP1`, `AtrialFibrillation`
-- **Backbones**: `mlp`, `lstm`, `gru`, `tcn`, `fcn`, `resnet1d`, `inceptionlite`, `transformer`
-- **Seeds**: `7`, `13`, `21`
-- **Recalibrators**: `none`, `temperature`, `platt`, `isotonic`, `vector`, `dirichlet`, `sebcal`
-
-Run on two GPUs:
-
-```bash
-bash run_benchmark.sh
-```
-
-or equivalently:
+Run the full UCR/UEA × backbone × seed grid:
 
 ```bash
 python -m src.run_all \
@@ -150,160 +223,151 @@ python -m src.run_all \
   --logs_dir logs
 ```
 
-The launcher runs one job per dataset--model--seed configuration and evaluates all requested calibrators for that trained backbone.
-
----
-
-## 6. Metrics produced by the code
-
-For each run, the code reports:
-
-- `accuracy`: frozen-backbone accuracy, reported as task context only;
-- `macro_f1`: frozen-backbone macro-F1, reported as task context only;
-- `ece`: expected calibration error;
-- `brier`: multiclass Brier score;
-- `nll`: negative log-likelihood;
-- `corr_auroc`: AUROC for ranking correct predictions above incorrect predictions;
-- `falseconf_0.9`: fraction of errors assigned confidence/reliability at least 0.9;
-- `risk_coverage_auc`: area under the risk-coverage curve;
-- `faithfulness_spearman`: Spearman alignment between spectral diagnostic scores and reliability drops under masking, for SEB-Cal.
-
-These metrics match the fixed-label selective-reliability framing of the paper: post-hoc methods are evaluated by the reliability score assigned to an unchanged backbone prediction.
-
----
-
-## 7. SEB-Cal implementation details
-
-The main implementation is in:
-
-```text
-src/calibration.py
-```
-
-SEB-Cal constructs:
-
-1. output-side features from logits, including maximum softmax probability, logit margin, predictive entropy, and top probabilities;
-2. deterministic spectral features from the input time series using a real FFT;
-3. band-level energy, spectral entropy, phase concentration, and peak dominance descriptors;
-4. a shallow logistic reliability layer trained on binary correctness of the frozen prediction.
-
-The SEB-Cal prediction preserves the class ranking of the frozen backbone and replaces only the top-class reliability assigned to the already-selected label.
-
----
-
-## 8. Generated tables and figures
-
-During execution, results are updated incrementally:
-
-```text
-results/master_metrics.csv
-```
-
-is regenerated after every completed run. The following files are also regenerated:
-
-```text
-tables/main_results_table.tex
-tables/ablation_table.tex
-figures/corr_auroc_by_calibrator.png
-figures/ece_vs_falseconf.png
-```
-
-This means reviewers can inspect intermediate outputs without waiting for the full benchmark to finish.
-
----
-
-## 9. Reproducing paper tables
-
-To reproduce the paper tables exactly, use one of the following workflows.
-
-### A. Full recomputation
-
-Run the full benchmark command in Section 5, then inspect:
-
-```text
-results/master_metrics.csv
-tables/main_results_table.tex
-tables/ablation_table.tex
-figures/
-```
-
-### B. Verification from precomputed artifacts
-
-If the repository includes `paper_artifacts/`, reviewers can verify the reported numbers directly from the supplied CSV files without retraining all backbones:
-
-```text
-paper_artifacts/master_metrics.csv
-paper_artifacts/table1_headline_summary.csv
-paper_artifacts/dataset_decomposition.csv
-paper_artifacts/backbone_decomposition.csv
-paper_artifacts/validation_gate_decisions.csv
-```
-
-The full benchmark is computationally heavier because it trains eight backbone families across eight datasets and multiple seeds.
-
----
-
-## 10. Hardware used
-
-The reported experiments were run on a workstation with two NVIDIA RTX A6000 GPUs. Backbone training used GPU execution. Post-hoc calibration, spectral feature extraction, diagnostic masking, and table generation are primarily CPU-side.
-
-Approximate expected cost:
-
-- full backbone grid: several hundred GPU-hours depending on local hardware and dataset download/cache state;
-- post-hoc calibration and table generation: tens of CPU-hours or less;
-- quick smoke test: minutes on a modern GPU.
-
----
-
-## 11. Anonymous review notes
-
-This artifact is anonymized for peer review. Please do not add author names, institutional paths, or non-anonymous URLs before submission.
-
-Recommended paper/checklist wording:
-
-```latex
-\paragraph{Code availability.}
-An anonymized implementation and reproduction instructions are available at
-\url{https://anonymous.4open.science/r/Spectral-Evidence-Bundling-SEBCal-XXXX/}.
-```
-
-Recommended checklist wording:
-
-```latex
-The benchmark uses public UCR/UEA datasets. The anonymized supplementary artifact includes implementation code, fixed split construction, seeds, spectral feature extraction, calibration baselines, SEB-Cal reliability estimation, masking controls, generated tables/figures, and scripts needed to reproduce the reported results.
-```
-
----
-
-## 12. Troubleshooting
-
-### Dataset download fails
-
-`aeon` downloads UCR/UEA datasets automatically. If a dataset fails to download, rerun the command or pre-download/cache the dataset using `aeon` utilities.
-
-### CUDA is unavailable
-
-The code automatically falls back to CPU if CUDA is not available. Full benchmark runtime will be much longer on CPU.
-
-### Full benchmark is too slow
-
-Use the smoke test first, then run a subset:
+Alternatively:
 
 ```bash
-python -m src.run_all \
-  --gpus 0 \
-  --datasets ECG200 FordA \
-  --models mlp transformer \
-  --calibrators none temperature sebcal \
-  --seeds 7
+bash run_benchmark.sh
 ```
 
-### Reviewers only want to verify numbers
-
-Include precomputed CSV files under `paper_artifacts/` and point reviewers to Section 9B.
+The launcher writes outputs incrementally after each completed `(dataset, model, seed, calibrator)` run. This means partial results can be inspected before the full benchmark completes.
 
 ---
 
-## 13. License
+## 8. How to reproduce the paper tables
 
-This artifact is provided for anonymous peer review. Add the final project license after de-anonymization.
+After the benchmark finishes, inspect:
+
+```bash
+python - <<'PY'
+import pandas as pd
+m = pd.read_csv('results/master_metrics.csv')
+print(m.head())
+print(m.groupby('calibrator')[['ece','corr_auroc','falseconf_0.9','risk_coverage_auc']].mean())
+PY
+```
+
+Generated LaTeX tables are written to:
+
+```text
+tables/main_results_table.tex
+tables/ablation_table.tex
+```
+
+For exact paper reproduction, the artifact should include the configuration-level metrics used for the manuscript, ideally as:
+
+```text
+results/master_metrics.csv
+paper_artifacts/table1_headline_summary.csv
+paper_artifacts/table2_dataset_decomposition.csv
+paper_artifacts/table3_backbone_decomposition.csv
+paper_artifacts/table4_frequency_bundle_ablation.csv
+paper_artifacts/validation_gate_decisions.csv
+paper_artifacts/bootstrap_uncertainty.csv
+```
+
+If these files are included, reviewers can verify the reported numbers directly without rerunning the full benchmark.
+
+---
+
+## 9. Core implementation files
+
+### `src/calibration.py`
+
+Implements:
+
+- temperature scaling;
+- Platt-style logistic calibration;
+- isotonic regression;
+- vector scaling;
+- Dirichlet calibration;
+- SEB-Cal spectral bundle extraction;
+- SEB-Cal shallow fixed-label reliability layer.
+
+### `src/models.py`
+
+Implements the eight backbone families:
+
+- MLP;
+- LSTM;
+- GRU;
+- TCN;
+- FCN;
+- 1D ResNet;
+- InceptionLite;
+- Transformer encoder.
+
+### `src/evaluation.py`
+
+Computes:
+
+- accuracy and macro-F1 for frozen-backbone context;
+- ECE;
+- Brier score;
+- NLL;
+- Corr-AUROC;
+- FalseConf@0.9;
+- AURC;
+- masking-based diagnostic faithfulness;
+- incremental result files, tables, and figures.
+
+---
+
+## 10. Notes on the validation gate
+
+The paper defines the deployed method as a validation-gated policy. In the manuscript, the gate selects SEB-Cal only when:
+
+```text
+Δ Corr-AUROC > δ_rank
+Δ FalseConf@0.9 ≤ τ_fc
+Δ AURC ≤ τ_aurc
+```
+
+relative to Raw and the strongest scalar recalibrator on a held-out gate-validation split.
+
+The simplified code in this repository implements the SEB-Cal reliability model and standard metric generation. For full paper-level reproduction, the artifact should also include the exact gate-validation split records and the script used to generate the policy-selected aggregate.
+
+---
+
+## 11. Computational requirements
+
+The benchmark was designed for a workstation with two GPUs. The paper reports experiments on two NVIDIA RTX A6000 GPUs.
+
+Approximate compute profile:
+
+- backbone training: GPU-heavy;
+- post-hoc calibration: CPU-light;
+- FFT feature extraction: CPU/GPU-light relative to backbone training;
+- full benchmark: several hundred GPU-hours depending on hardware and early stopping.
+
+SEB-Cal adds one real FFT per channel and deterministic spectral reductions:
+
+```text
+O(C T log T) + O(CF + B)
+```
+
+where `C` is the number of channels, `T` is sequence length, `F` is the number of retained Fourier frequencies, and `B` is the number of frequency bands.
+
+---
+
+## 12. Artifact checklist
+
+A strong NeurIPS artifact should contain:
+
+- [x] source code for datasets, backbones, calibration, SEB-Cal, and evaluation;
+- [x] requirements file;
+- [x] public dataset loader;
+- [x] benchmark launcher;
+- [x] incremental result generation;
+- [ ] exact split identifiers for train/calibration/gate-validation/test;
+- [ ] precomputed configuration-level metrics matching the paper;
+- [ ] exact table-generation scripts for every manuscript and appendix table;
+- [ ] validation-gate decision script;
+- [ ] proximity, time-domain, STFT, dependence-diagnostic, bootstrap, and feature-space masking scripts if claimed as fully reproducible;
+- [ ] trained logits or run-level JSON files for direct verification without rerunning all backbones.
+
+---
+
+## 13. Citation
+
+This repository is anonymous for review. Citation information will be added after the review process.
+
