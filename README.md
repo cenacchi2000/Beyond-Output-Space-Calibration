@@ -47,7 +47,6 @@ The paper evaluates SEB-Cal across eight UCR/UEA datasets, eight time-series bac
 
 ### 3.1 Aggregate fixed-label reliability
 
-![Aggregate fixed-label reliability summary](./main_results_summary.png)
 
 | Method | ECE ↓ | Brier ↓ | NLL ↓ | Corr-AUROC ↑ | FalseConf@0.9 ↓ | AURC ↓ | Faith. ↑ |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -65,10 +64,6 @@ The paper evaluates SEB-Cal across eight UCR/UEA datasets, eight time-series bac
 
 ### 3.2 Frequency-bundle ablation
 
-<p align="center">
-  <img src="./frequency_bundle_ablation.svg" width="86%" alt="Frequency-bundle ablation">
-</p>
-
 | Variant | Corr-AUROC ↑ |
 |---|---:|
 | Remove all `g(x)`: output-side only `h(x)` | 0.703 |
@@ -84,23 +79,6 @@ The paper evaluates SEB-Cal across eight UCR/UEA datasets, eight time-series bac
 
 This ablation is a **mechanism test for ranking signal**, not a deployment-safety table. FalseConf@0.9 and AURC safety are evaluated by the validation-gated policy.
 
-### 3.3 Validation-gated deployment policy
-
-<p align="center">
-  <img src="./validation_gate_policy.svg" width="86%" alt="Validation-gated deployment policy">
-</p>
-
-The gate selects SEB-Cal only when held-out validation satisfies:
-
-```text
-Δ Corr-AUROC > δ_rank
-Δ FalseConf@0.9 ≤ τ_fc
-Δ AURC ≤ τ_aurc
-```
-
-Otherwise the selected reliability policy reverts to Raw confidence or the safer scalar recalibrator.
-
----
 
 ## 4. Repository structure
 
