@@ -1,141 +1,309 @@
-from __future__ import annotations
-import numpy as np
-import pandas as pd
-from pathlib import Path
-import matplotlib.pyplot as plt
-from scipy.stats import spearmanr
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, log_loss
-from .calibration import ece_score, multiclass_brier, correctness_auroc, falseconf_at_thresh, risk_coverage_auc, spectral_bundle
-from .utils import ensure_dir
+# SEB-Cal: Spectral Evidence Bundling for Selective Reliability Estimation in Time-Series Classification
 
-def evaluate_probs(y_true: np.ndarray, probs: np.ndarray) -> dict:
-    pred = probs.argmax(axis=1)
-    out = {
-        "accuracy": float(accuracy_score(y_true, pred)),
-        "macro_f1": float(f1_score(y_true, pred, average="macro")),
-        "ece": ece_score(y_true, probs),
-        "brier": multiclass_brier(y_true, probs),
-        "nll": float(log_loss(y_true, probs)),
-        "corr_auroc": correctness_auroc(y_true, probs),
-        "falseconf_0.9": falseconf_at_thresh(y_true, probs, 0.9),
-        "risk_coverage_auc": risk_coverage_auc(y_true, probs.max(axis=1), pred),
-    }
-    if probs.shape[1] == 2:
-        out["class_auroc"] = float(roc_auc_score(y_true, probs[:, 1]))
-    else:
-        out["class_auroc"] = float("nan")
-    return out
+Anonymous artifact for NeurIPS 2026 submission:
 
-def certificate_faithfulness(model, calibrator, logits_test, X_test, device=None, max_samples: int = 64) -> dict:
-    if not hasattr(calibrator, "predict"):
-        return {"faithfulness_spearman": float("nan")}
-    result = calibrator.predict(logits_test[:max_samples], X_test[:max_samples])
-    cert = result.certificate
-    if cert is None:
-        return {"faithfulness_spearman": float("nan")}
-    spec_feats, bands = spectral_bundle(X_test[:max_samples], n_bands=len(result.metadata["bands"]))
-    impacts, scores = [], []
-    base_probs = result.probs.max(axis=1)
-    for i in range(min(max_samples, len(X_test))):
-        band_scores = []
-        band_impacts = []
-        n_group = len(bands)
-        for b in range(n_group):
-            X_mask = X_test[i:i+1].copy()
-            fft = np.fft.rfft(X_mask, axis=-1)
-            fft[..., bands[b]] = 0
-            X_mask = np.fft.irfft(fft, n=X_test.shape[-1], axis=-1).astype(np.float32)
-            masked = calibrator.predict(logits_test[i:i+1], X_mask)
-            drop = float(base_probs[i] - masked.probs.max(axis=1)[0])
-            band_impacts.append(drop)
-            band_scores.append(float(np.mean(cert[i, b::n_group][:1]) if cert.shape[1] >= n_group else cert[i, b]))
-        scores.extend(band_scores)
-        impacts.extend(band_impacts)
-    if len(scores) < 2:
-        return {"faithfulness_spearman": float("nan")}
-    rho, _ = spearmanr(scores, impacts)
-    return {"faithfulness_spearman": float(rho)}
+**Beyond Output-Space Calibration: Spectral Evidence Bundling for Selective Reliability Estimation in Time-Series Classification**
 
-def append_and_save_metrics(row: dict, results_dir: str | Path) -> Path:
-    results_dir = ensure_dir(results_dir)
-    csv_path = results_dir / "master_metrics.csv"
-    df = pd.DataFrame([row])
-    if csv_path.exists():
-        old = pd.read_csv(csv_path)
-        df = pd.concat([old, df], ignore_index=True)
-    df.to_csv(csv_path, index=False)
-    return csv_path
+This repository contains the implementation used to evaluate **SEB-Cal**, a validation-gated, fixed-label post-hoc reliability policy for time-series classification. SEB-Cal leaves the trained backbone and predicted label unchanged, augments output-side confidence features with deterministic whole-sample spectral descriptors, and estimates whether the selected prediction should be trusted.
 
-def generate_tables(results_dir: str | Path, tables_dir: str | Path) -> None:
-    results_dir = Path(results_dir)
-    tables_dir = ensure_dir(tables_dir)
-    csv_path = results_dir / "master_metrics.csv"
-    if not csv_path.exists():
-        return
-    df = pd.read_csv(csv_path)
-    if df.empty:
-        return
-    keep = ["dataset", "model", "calibrator", "accuracy", "ece", "corr_auroc", "falseconf_0.9", "risk_coverage_auc"]
-    g = df[keep].groupby(["dataset", "model", "calibrator"], as_index=False).mean(numeric_only=True)
-    main_lines = []
-    main_lines.append("\\begin{tabular}{lllrrrr}")
-    main_lines.append("\\toprule")
-    main_lines.append("Dataset & Model & Calibrator & Acc & ECE & CorrAUROC & FalseConf@0.9 & AURC\\\\")
-    main_lines.append("\\midrule")
-    for _, r in g.sort_values(["dataset", "model", "calibrator"]).iterrows():
-        main_lines.append(
-            f"{r['dataset']} & {r['model']} & {r['calibrator']} & "
-            f"{r['accuracy']:.3f} & {r['ece']:.3f} & {r['corr_auroc']:.3f} & "
-            f"{r['falseconf_0.9']:.3f} & {r['risk_coverage_auc']:.3f}\\\\"
-        )
-    main_lines.append("\\bottomrule")
-    main_lines.append("\\end{tabular}")
-    (tables_dir / "main_results_table.tex").write_text("\n".join(main_lines), encoding="utf-8")
+Recommended anonymous code link format for the paper:
 
-    # ablation-style aggregated table
-    if "faithfulness_spearman" in df.columns:
-        ag = df.groupby("calibrator", as_index=False)[["ece", "corr_auroc", "falseconf_0.9", "faithfulness_spearman"]].mean(numeric_only=True)
-        ab_lines = []
-        ab_lines.append("\\begin{tabular}{lrrrr}")
-        ab_lines.append("\\toprule")
-        ab_lines.append("Method & ECE & CorrAUROC & FalseConf@0.9 & Faithfulness\\\\")
-        ab_lines.append("\\midrule")
-        for _, r in ag.sort_values("calibrator").iterrows():
-            ab_lines.append(
-                f"{r['calibrator']} & {r['ece']:.3f} & {r['corr_auroc']:.3f} & "
-                f"{r['falseconf_0.9']:.3f} & {r['faithfulness_spearman']:.3f}\\\\"
-            )
-        ab_lines.append("\\bottomrule")
-        ab_lines.append("\\end{tabular}")
-        (tables_dir / "ablation_table.tex").write_text("\n".join(ab_lines), encoding="utf-8")
+```text
+https://anonymous.4open.science/r/Spectral-Evidence-Bundling-SEBCal-XXXX/
+```
 
-def generate_figures(results_dir: str | Path, figures_dir: str | Path) -> None:
-    results_dir = Path(results_dir)
-    figures_dir = ensure_dir(figures_dir)
-    csv_path = results_dir / "master_metrics.csv"
-    if not csv_path.exists():
-        return
-    df = pd.read_csv(csv_path)
-    if df.empty:
-        return
-    # Figure 1: CorrAUROC by calibrator
-    ag = df.groupby("calibrator", as_index=False)["corr_auroc"].mean(numeric_only=True).sort_values("corr_auroc", ascending=False)
-    plt.figure(figsize=(8, 4))
-    plt.bar(ag["calibrator"], ag["corr_auroc"])
-    plt.xticks(rotation=30, ha="right")
-    plt.ylabel("Mean Correctness-AUROC")
-    plt.tight_layout()
-    plt.savefig(figures_dir / "corr_auroc_by_calibrator.png", dpi=200)
-    plt.close()
+After uploading the repository to Anonymous 4open Science, replace `XXXX` with the generated anonymous repository identifier and cite the root URL in the paper/checklist.
 
-    # Figure 2: ECE vs FalseConf
-    plt.figure(figsize=(5, 4))
-    ag2 = df.groupby("calibrator", as_index=False)[["ece", "falseconf_0.9"]].mean(numeric_only=True)
-    plt.scatter(ag2["ece"], ag2["falseconf_0.9"])
-    for _, r in ag2.iterrows():
-        plt.text(r["ece"], r["falseconf_0.9"], r["calibrator"], fontsize=8)
-    plt.xlabel("ECE")
-    plt.ylabel("FalseConf@0.9")
-    plt.tight_layout()
-    plt.savefig(figures_dir / "ece_vs_falseconf.png", dpi=200)
-    plt.close()
+---
+
+## 1. What this artifact supports
+
+The artifact supports the main claims of the paper:
+
+1. **Fixed-label reliability estimation**: post-hoc methods do not change the predicted class; they estimate the reliability of the already-selected prediction.
+2. **Spectral Evidence Bundling (SEB-Cal)**: output-side cues are augmented with whole-sample spectral descriptors: band energy, spectral entropy, peak dominance, and phase stability.
+3. **Matched benchmark evaluation**: experiments cover eight UCR/UEA time-series classification datasets, eight backbone families, and standard output-space recalibrators.
+4. **Selective-reliability metrics**: evaluation reports ECE, Brier score, NLL, Corr-AUROC, FalseConf@0.9, AURC, and diagnostic faithfulness where applicable.
+5. **Incremental reproducibility**: each completed dataset--model--seed run writes a run-level result and updates aggregate CSV, table, and figure outputs.
+
+The repository is designed to be readable and editable rather than heavily engineered.
+
+---
+
+## 2. Repository structure
+
+```text
+.
+├── README.md
+├── requirements.txt
+├── run_benchmark.sh
+├── main.tex
+├── references.bib
+├── src/
+│   ├── __init__.py
+│   ├── calibration.py      # scalar recalibrators + SEB-Cal spectral reliability layer
+│   ├── datasets.py         # UCR/UEA loading and train/calibration/test split construction
+│   ├── evaluation.py       # reliability metrics, diagnostic faithfulness, tables, figures
+│   ├── models.py           # MLP, LSTM, GRU, TCN, FCN, ResNet1D, InceptionLite, Transformer
+│   ├── run_all.py          # multi-job launcher over datasets, backbones, seeds
+│   ├── run_one.py          # one dataset--model--seed experiment
+│   ├── training.py         # backbone training and logit extraction
+│   └── utils.py
+├── results/                # generated run-level JSON files and master_metrics.csv
+├── tables/                 # generated LaTeX tables
+├── figures/                # generated figures
+└── logs/                   # progress logs
+```
+
+Optional paper-artifact folders can also be included when available:
+
+```text
+paper_artifacts/
+├── master_metrics.csv
+├── table1_headline_summary.csv
+├── dataset_decomposition.csv
+├── backbone_decomposition.csv
+├── validation_gate_decisions.csv
+├── appendix_outputs/
+└── trained_outputs/
+```
+
+Including these optional files lets reviewers verify reported tables without rerunning the full benchmark.
+
+---
+
+## 3. Installation
+
+Create a clean environment, then install dependencies:
+
+```bash
+conda create -n sebcal python=3.10 -y
+conda activate sebcal
+pip install -r requirements.txt
+```
+
+The artifact uses public UCR/UEA datasets loaded through `aeon`. Dataset files are downloaded automatically by `aeon` when first requested.
+
+---
+
+## 4. Quick smoke test
+
+Run a small experiment on one dataset, one backbone, one seed, and a subset of calibrators:
+
+```bash
+python -m src.run_one \
+  --dataset ECG200 \
+  --model mlp \
+  --seed 7 \
+  --gpu 0 \
+  --calibrators none temperature platt sebcal \
+  --results_dir results \
+  --tables_dir tables \
+  --figures_dir figures \
+  --logs_dir logs
+```
+
+Expected outputs:
+
+```text
+results/runs/ECG200__mlp__seed7__none.json
+results/runs/ECG200__mlp__seed7__temperature.json
+results/runs/ECG200__mlp__seed7__platt.json
+results/runs/ECG200__mlp__seed7__sebcal.json
+results/master_metrics.csv
+tables/main_results_table.tex
+tables/ablation_table.tex
+figures/corr_auroc_by_calibrator.png
+figures/ece_vs_falseconf.png
+logs/progress.log
+```
+
+---
+
+## 5. Full benchmark command
+
+The full benchmark used in the paper covers:
+
+- **Datasets**: `ECG200`, `FordA`, `Wafer`, `ElectricDevices`, `UWaveGestureLibrary`, `BasicMotions`, `SelfRegulationSCP1`, `AtrialFibrillation`
+- **Backbones**: `mlp`, `lstm`, `gru`, `tcn`, `fcn`, `resnet1d`, `inceptionlite`, `transformer`
+- **Seeds**: `7`, `13`, `21`
+- **Recalibrators**: `none`, `temperature`, `platt`, `isotonic`, `vector`, `dirichlet`, `sebcal`
+
+Run on two GPUs:
+
+```bash
+bash run_benchmark.sh
+```
+
+or equivalently:
+
+```bash
+python -m src.run_all \
+  --gpus 0 1 \
+  --datasets ECG200 FordA Wafer ElectricDevices UWaveGestureLibrary BasicMotions SelfRegulationSCP1 AtrialFibrillation \
+  --models mlp lstm gru tcn fcn resnet1d inceptionlite transformer \
+  --calibrators none temperature platt isotonic vector dirichlet sebcal \
+  --seeds 7 13 21 \
+  --results_dir results \
+  --tables_dir tables \
+  --figures_dir figures \
+  --logs_dir logs
+```
+
+The launcher runs one job per dataset--model--seed configuration and evaluates all requested calibrators for that trained backbone.
+
+---
+
+## 6. Metrics produced by the code
+
+For each run, the code reports:
+
+- `accuracy`: frozen-backbone accuracy, reported as task context only;
+- `macro_f1`: frozen-backbone macro-F1, reported as task context only;
+- `ece`: expected calibration error;
+- `brier`: multiclass Brier score;
+- `nll`: negative log-likelihood;
+- `corr_auroc`: AUROC for ranking correct predictions above incorrect predictions;
+- `falseconf_0.9`: fraction of errors assigned confidence/reliability at least 0.9;
+- `risk_coverage_auc`: area under the risk-coverage curve;
+- `faithfulness_spearman`: Spearman alignment between spectral diagnostic scores and reliability drops under masking, for SEB-Cal.
+
+These metrics match the fixed-label selective-reliability framing of the paper: post-hoc methods are evaluated by the reliability score assigned to an unchanged backbone prediction.
+
+---
+
+## 7. SEB-Cal implementation details
+
+The main implementation is in:
+
+```text
+src/calibration.py
+```
+
+SEB-Cal constructs:
+
+1. output-side features from logits, including maximum softmax probability, logit margin, predictive entropy, and top probabilities;
+2. deterministic spectral features from the input time series using a real FFT;
+3. band-level energy, spectral entropy, phase concentration, and peak dominance descriptors;
+4. a shallow logistic reliability layer trained on binary correctness of the frozen prediction.
+
+The SEB-Cal prediction preserves the class ranking of the frozen backbone and replaces only the top-class reliability assigned to the already-selected label.
+
+---
+
+## 8. Generated tables and figures
+
+During execution, results are updated incrementally:
+
+```text
+results/master_metrics.csv
+```
+
+is regenerated after every completed run. The following files are also regenerated:
+
+```text
+tables/main_results_table.tex
+tables/ablation_table.tex
+figures/corr_auroc_by_calibrator.png
+figures/ece_vs_falseconf.png
+```
+
+This means reviewers can inspect intermediate outputs without waiting for the full benchmark to finish.
+
+---
+
+## 9. Reproducing paper tables
+
+To reproduce the paper tables exactly, use one of the following workflows.
+
+### A. Full recomputation
+
+Run the full benchmark command in Section 5, then inspect:
+
+```text
+results/master_metrics.csv
+tables/main_results_table.tex
+tables/ablation_table.tex
+figures/
+```
+
+### B. Verification from precomputed artifacts
+
+If the repository includes `paper_artifacts/`, reviewers can verify the reported numbers directly from the supplied CSV files without retraining all backbones:
+
+```text
+paper_artifacts/master_metrics.csv
+paper_artifacts/table1_headline_summary.csv
+paper_artifacts/dataset_decomposition.csv
+paper_artifacts/backbone_decomposition.csv
+paper_artifacts/validation_gate_decisions.csv
+```
+
+The full benchmark is computationally heavier because it trains eight backbone families across eight datasets and multiple seeds.
+
+---
+
+## 10. Hardware used
+
+The reported experiments were run on a workstation with two NVIDIA RTX A6000 GPUs. Backbone training used GPU execution. Post-hoc calibration, spectral feature extraction, diagnostic masking, and table generation are primarily CPU-side.
+
+Approximate expected cost:
+
+- full backbone grid: several hundred GPU-hours depending on local hardware and dataset download/cache state;
+- post-hoc calibration and table generation: tens of CPU-hours or less;
+- quick smoke test: minutes on a modern GPU.
+
+---
+
+## 11. Anonymous review notes
+
+This artifact is anonymized for peer review. Please do not add author names, institutional paths, or non-anonymous URLs before submission.
+
+Recommended paper/checklist wording:
+
+```latex
+\paragraph{Code availability.}
+An anonymized implementation and reproduction instructions are available at
+\url{https://anonymous.4open.science/r/Spectral-Evidence-Bundling-SEBCal-XXXX/}.
+```
+
+Recommended checklist wording:
+
+```latex
+The benchmark uses public UCR/UEA datasets. The anonymized supplementary artifact includes implementation code, fixed split construction, seeds, spectral feature extraction, calibration baselines, SEB-Cal reliability estimation, masking controls, generated tables/figures, and scripts needed to reproduce the reported results.
+```
+
+---
+
+## 12. Troubleshooting
+
+### Dataset download fails
+
+`aeon` downloads UCR/UEA datasets automatically. If a dataset fails to download, rerun the command or pre-download/cache the dataset using `aeon` utilities.
+
+### CUDA is unavailable
+
+The code automatically falls back to CPU if CUDA is not available. Full benchmark runtime will be much longer on CPU.
+
+### Full benchmark is too slow
+
+Use the smoke test first, then run a subset:
+
+```bash
+python -m src.run_all \
+  --gpus 0 \
+  --datasets ECG200 FordA \
+  --models mlp transformer \
+  --calibrators none temperature sebcal \
+  --seeds 7
+```
+
+### Reviewers only want to verify numbers
+
+Include precomputed CSV files under `paper_artifacts/` and point reviewers to Section 9B.
+
+---
+
+## 13. License
+
+This artifact is provided for anonymous peer review. Add the final project license after de-anonymization.
