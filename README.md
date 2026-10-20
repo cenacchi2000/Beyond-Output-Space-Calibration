@@ -6,6 +6,62 @@ SEB-Cal is a **fixed-label, post-hoc reliability policy** for time-series classi
 ![SEB-Cal README result panel](./readme_results_panel.png)
 
 ---
+## Research contributions
+
+SEB-Cal investigates whether the temporal signal contains useful information about prediction correctness beyond what is available in the classifier's output scores. Its contribution combines an input-conditioned reliability estimator, a validation-based selection policy, and an empirical analysis of when spectral evidence helps.
+
+### 1. Input-conditioned reliability without changing predictions
+
+SEB-Cal combines two complementary sources of information:
+
+- **Output-side cues:** confidence, margin, and predictive entropy.
+- **Input-side evidence:** deterministic spectral descriptors of the observed time series.
+
+A shallow reliability layer uses these features to estimate whether the frozen classifier's prediction is correct.
+
+The method preserves both the trained backbone and its predicted labels. Improvements therefore concern reliability estimation and review prioritisation, rather than gains obtained by changing classification decisions.
+
+### 2. Validation-gated use of spectral evidence
+
+Spectral conditioning is not assumed to help every dataset or model.
+
+A held-out validation gate selects SEB-Cal only when it improves correctness-aware ranking without exceeding declared tolerances for false high-confidence errors and area under the risk–coverage curve. Otherwise, the policy falls back to an output-space baseline.
+
+This makes the evaluated method a conditional selection policy rather than an unconditional recommendation to use spectral features.
+
+**Scope:** the gate provides an empirical selection rule on validation data. It does not guarantee reliability under arbitrary deployment shifts.
+
+### 3. Evaluation across heterogeneous time-series settings
+
+The reported benchmark spans eight UCR/UEA datasets, eight backbone families, and standard output-space recalibrators. Aggregate comparisons use a matched subset of 191 dataset–model–seed configurations.
+
+Relative to raw confidence, the policy-selected method reports:
+
+| Metric | Raw confidence | Policy-selected SEB-Cal |
+|---|---:|---:|
+| Correctness-ranking AUROC ↑ | 0.693 | 0.786 |
+| Expected calibration error ↓ | 0.097 | 0.075 |
+| FalseConf@0.9 ↓ | 0.128 | 0.094 |
+| Area under the risk–coverage curve ↓ | 0.219 | 0.209 |
+
+These results support evaluating calibration, correctness ranking, false confidence, and selective prediction together. A reduction in average calibration error alone does not establish that a method is better at prioritising mistakes for review.
+
+### 4. Ablations that identify where the ranking signal comes from
+
+The spectral-feature ablation compares the full bundle against output-only features, individual descriptor families, and leave-one-family-out variants.
+
+Reported correctness-ranking AUROC increases from **0.703** for output-only features to **0.786** for the full bundle. Energy-only conditioning reaches **0.778**, while removing energy reduces performance to **0.752**, indicating that energy descriptors supply much of the observed ranking signal.
+
+The results also reveal limits: removing phase slightly increases aggregate AUROC to **0.787**, and removing entropy leaves it unchanged at the reported precision. The evidence therefore supports the usefulness of spectral conditioning without establishing that every descriptor is necessary in every setting.
+
+### 5. Inspectable evidence and explicit interpretation boundaries
+
+Named spectral descriptors make the inputs to the reliability estimator inspectable. Researchers can examine which signal properties are supplied alongside confidence and test their contribution through controlled ablations.
+
+These descriptors are statistical evidence for reliability estimation. They should not be interpreted as causal explanations, proof that a classifier used a particular frequency band, or clinically validated biomarkers.
+
+The repository presents implementation components and reported result summaries for inspection. Recreating summaries from supplied paper-value tables is distinct from independently rerunning the complete benchmark.
+
 
 ## 1. Research problem
 
